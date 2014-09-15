@@ -1,0 +1,474 @@
+#------------------------------------------------------INTRODUCTION TO PROBLEM SOLUTION APPROACH --------------------------------------------#####
+###In mobile transaction database, mobile behaviors vary among different user clusters or at various time intervals. The prediction of user mobile
+#can be based on the corresponding mobile patters in each user cluster and time interval.
+
+###USER CLUSTERS: To achieve user clustering without user profiles, evaluating the similarities of mobile transaction sequences is required.
+#PART-I of the code performs user-clustering based on transaction clustering algorithm called CO-Smart-CAST (Cluster-Object-based Smart Cluster Affinity Search Technique).
+#It builds a cluster model for mobile transactions based on Location-Based Service Alignment (LBS-Alignment).
+###TIME SEGMENTS: The time interval segmentation method helps us to find various user behaviors in different time intervals.
+#PART-II of the code first finds out number of time-segmentation data points in the mobile transaction database and then uses Genetic Algorithm to find
+#best time segment intervals in the transaction database.
+###BASED ON the USER CLUSTERS and TIME-SEGMENTS produced from the code, an approach is discussed to find Cluster-based Temporal Mobile Sequential Patters (CTMSPs)
+#and a prediction strategy is mentioned to predict subsequent user mobile behaviors.
+
+
+#####-------------------------------------------------------------START of CODE--------------------------------------------------------------#####
+#Setting the Directory where the sample data set is there #You can change the directory name here
+setwd("C:/Users/NEELU/Desktop/NEELU/AdNear/Assignment Coding")
+#Reading the sample data set in a table called AA
+AA = read.delim("Test_User_Data2.txt",header=TRUE,sep="|")
+
+#####------------------------------------------------Defining the Table AA column headers-----------------------------------------------------#####
+#Time_App		:	Time when the app is used by the user
+#UID			:	User ID
+#Service_Name	:	Name of the App used
+#Time_Use		:	Epochtime
+#Service_ID		:	App ID
+#geo_longitude	:	User location longitude
+#geo_latitude	:	User location latitude
+
+##### -----------------------------------------------PART-I: STARTING USER CLUSTERING----------------------------------------------------------#####
+##### -----------------------------------------------Step-1: LBS-Alignment Algorithm-----------------------------------------------------------#####
+##INPUT: Mobile Transaction Database
+##OUTPUT: Similarity Matrix between the users' transaction sequences
+
+#Starting the first 2-loops for calculating the Similarity Matrix between different user sequences
+Unique_UID = unique(AA$UID)
+len_UID = length(unique(AA$UID))
+# Populating the cells of Final Similarity Matrix
+Mat_S = matrix(0,len_UID,len_UID)
+for (k in 1:len_UID)
+{	
+	#Filtering the data for UID corresponding to k
+	UID_k = AA[AA$UID == Unique_UID[k],] 
+	for (m in 1:len_UID)
+	{
+		#Filtering the data for UID corresponding to m
+		UID_m = AA[AA$UID == Unique_UID[m],]
+		
+		#Initializing the Intermediate Matrix to calculate similarity score between sequences for UID_k and UID_m
+		Mat_Int = matrix(0,nrow(UID_k)+1,nrow(UID_m)+1)
+		
+		#Defining the location penalty as p
+		p = 0.5/(nrow(UID_k)+nrow(UID_m))
+
+		#Defining the base similarity score as 0.5 and populating the first column and first row of Intermediate Matrix
+		Mat_Int[1,1] = 0.5		
+		
+		#Calculating Time Length
+		time_len = max(max(UID_k$Time_App),max(UID_m$Time_App))- min(min(UID_k$Time_App),min(UID_m$Time_App)) + 1		
+		
+		for (i in 1:nrow(UID_k)) 
+		{
+			Mat_Int[i+1,1] = Mat_Int[i,1] - p
+		}
+		for (j in 1:nrow(UID_m)) 
+		{
+			Mat_Int[1,j+1] = Mat_Int[1,j] - p
+		}
+		
+		#Populating the Intermediate Matrix to calculate similarity score		
+		for (i in 1:nrow(UID_k)) 
+		{
+			for (j in 1:nrow(UID_m)) 
+			{
+				if((UID_k$geo_longitude[i]==UID_m$geo_longitude[j]) & (UID_k$geo_longitude[i]==UID_m$geo_longitude[j]))
+				{
+					#Calculating Time Penalty
+					TP = p * abs(UID_k$Time_App[i]-UID_m$Time_App[j])/time_len
+					#Calculating Service Reward
+					if(UID_k$Service_Name[i]==UID_m$Service_Name[j])
+					{
+						SR = p * 1
+					}
+					else SR = p * 0
+					#Populating the Intermediate Matrix using Time Penalty and Service Reward
+					Mat_Int[i+1,j+1] = max(Mat_Int[i,j] - TP + SR, Mat_Int[i,j+1] - p, Mat_Int[i+1,j] - p)
+				}
+				else Mat_Int[i+1,j+1] = max(Mat_Int[i,j+1] - p, Mat_Int[i+1,j] - p)
+			}
+		}
+		
+		#Populating the Similarity Matrix Cell using the last cell value of Intermediate Matrix
+		Mat_S[k,m] = Mat_Int[nrow(UID_k)+1,nrow(UID_m)+1]
+	}
+}
+##### -----------------------------------------------END OF Step-1: LBS-Alignment Algorithm----------------------------------------------------#####
+
+
+##### -----------------------------------------------Step-2: The CO-Smart-CAST Algorithm-------------------------------------------------------#####
+
+#First, we will define 2 functions here:
+#---CAST (Cluster Affinity Search Technique) Clustering Algorithm and Hubert's T Statistics to be called in the main part of CO-Smart-CAST Algorithm
+
+##Defining affinity vector calculation function to be used in CAST_Algo function
+Aff_Vector = function(vector1,vector2, UserID, Sim_Matrix)
+{
+	AffinityVector = NULL
+	for (i in 1:length(vector1))
+	{
+		Affinity = 0
+		for (j in 1:length(vector2))
+		{
+			Affinity = Affinity + Sim_Matrix[match(vector1[i],UserID),match(vector2[j],UserID)]
+		}		
+		AffinityVector <- c(AffinityVector,Affinity)
+	}	
+	return (AffinityVector)
+}
+
+#------------------------------------Defining Function CAST_Algo: CAST (Cluster Affinity Search Technique) Clustering Algorithm----------------#
+##INPUT: Similarity Matrix (S) and Aff_Threshold (at)
+##OUTPUT: Returns Users Clusters using CAST algorithm
+CAST_Algo = function(Unique_UID,Sim_Matrix_Input,at)
+{
+	#Create temporarily processing vector initialized with all UIDs and defining cluster vector for final clusters
+	all_temp = Unique_UID
+	len_UID = length(Unique_UID)
+	cluster = NULL
+	clus_num = 0
+		
+	while(length(all_temp)>0)
+	{
+		#Open new cluster, add random instance from UIDs as seed in cluster and remove it from all_temp
+		random_seed = sample(1:length(all_temp),1)
+		currentCluster = NULL
+		currentCluster <- append(currentCluster,all_temp[random_seed])		
+		all_temp <- all_temp[all_temp!=all_temp[random_seed]]
+				
+		#Create affinity vector of all_temp in respect to open cluster
+		aff_All = NULL
+		aff_All = Aff_Vector(currentCluster,all_temp,Unique_UID,Sim_Matrix_Input)
+		#Find max affinity affinity Vector
+		maxAff = max(aff_All)
+		Index_maxAff = match(c(maxAff),aff_All)
+		
+		#Create affinity vector of current cluster
+		aff_currentclus = NULL
+		aff_currentclus = Aff_Vector(currentCluster,currentCluster,Unique_UID,Sim_Matrix_Input)
+		
+		while(maxAff >= (at * length(currentCluster)))
+		{
+			#Add element U with max affinity to open cluster and remove from all_temp
+			U = all_temp[Index_maxAff]
+			currentCluster <- append(currentCluster,U)
+			aff_currentclus <- append(aff_currentclus,aff_All[Index_maxAff])
+			all_temp <- all_temp[all_temp!=U]
+			aff_All <- aff_All[aff_All!=aff_All[Index_maxAff]]
+			
+			#Update affinity values in affinity vector of all_temp
+			tmp = NULL
+			for (i in 1:length(aff_All))
+			{
+				newAff = aff_All[i]
+				newAff = newAff + Sim_Matrix_Input[match(U,Unique_UID),match(all_temp[i],Unique_UID)]
+				tmp <- append(tmp,newAff)
+			} 
+			aff_All = tmp
+			
+			#Update affinity values in affinity vector of currentCluster
+			tmp2 = NULL
+			for (i in 1:length(aff_currentclus))
+			{
+				newAff2 = aff_currentclus[i]
+				newAff2 = newAff2 + Sim_Matrix_Input[match(U,Unique_UID),match(currentCluster[i],Unique_UID)]
+				tmp2 <- append(tmp2,newAff2)
+			} 
+			aff_currentclus = tmp2
+		}
+		clus_num = clus_num + 1
+		for (i in 1:len_UID)
+		{
+			if(is.element(Unique_UID[i],currentCluster)) {cluster[i] =  clus_num} else cluster[i] = cluster[i]
+		}
+	}
+	return (cluster);
+} 
+#------------------------------------END OF CAST_Algo Function---------------------------------------------------------------------------------#
+
+#------------------------------------Defining Function Huberts_T Statistics--------------------------------------------------------------------#
+##INPUT: Similarity Matrix, Clustering Result, affinity threshold
+##OUTPUT: Hubert's T Statistics Coefficient
+
+Hubert_T = function(Unique_UID,Sim_Matrix,at)
+{
+	#Creation of matrix Mat_Y from Clus_Result, where Yij = 1 if i,j are in same cluster and 0 otherwise	
+	Clus_Result = CAST_Algo(Unique_UID,Sim_Matrix,at)
+	len_UID = length(Unique_UID)
+	Mat_Y = matrix(0,len_UID,len_UID)
+	for (i in 1:len_UID)
+	{
+		for (j in 1:len_UID)
+		{
+			if(Clus_Result[i]==Clus_Result[j]) {Mat_Y[i,j] = 1} else Mat_Y[i,j] = 0
+		}
+	}
+	
+	#Matrix Mat_X is equal to Similarity Matrix
+	Mat_X = Sim_Matrix
+	M = len_UID * (len_UID-1)/2
+	N = len_UID
+	Term_1 = 0
+	Term_2 = 0
+	Term_3 = 0
+	Term_4 = 0
+	#Calculation of Hubert's T Statistics Coefficient
+	for (i in 1:(N-1))
+	{
+		for (j in (i+1):N)
+		{			
+			Term_1 = Term_1 + (Mat_X[i,j]*Mat_Y[i,j])
+			Term_2 = Term_2 + Mat_X[i,j]
+			Term_3 = Term_3 + Mat_Y[i,j]			
+			Term_4 = Term_4 + (Mat_X[i,j]*Mat_X[i,j])
+		}
+	}
+	P_term = sqrt(M * Term_4 - ((Term_2)*(Term_2)))
+	Hubert = (M * Term_1 - (Term_2*Term_3))/(P_term * sqrt(M*Term_3-((Term_3)*(Term_3))))
+	return (Hubert)
+}
+#------------------------------------END OF Hubert's T Statistics Coefficient------------------------------------------------------------------#
+
+#------------------------------------Defining Main CO-Smart-CAST Algorithm----------------------------------------#
+##INPUT: Similarity Matrix Mat_S between the users' transaction sequences from Step-1
+##OUTPUT: Users Clusters using the CO-Smart-CAST Algorithm
+
+	R_upper = 0
+	R_lower = 0.1
+	Hubert_Coeff = array(0,4)
+	aff_thres = array(0,4)
+	Clus_results = NULL
+while((R_upper - R_lower)<(10^(-5)))
+{
+	for (i in 1:4) #Running 4 iterations for best cluster results
+	{
+		aff_thres[i] = ((i-1) * ((R_upper - R_lower)/4)) + R_lower		
+		Hubert_Coeff[i] = Hubert_T(Unique_UID,Mat_S,aff_thres[i])			
+	}
+	max_Hubert_Coeff = max(Hubert_Coeff)
+	arg_max_Hubert_Coeff = match(c(max_Hubert_Coeff),Hubert_Coeff)
+	R_upper = aff_thres[arg_max_Hubert_Coeff-2]
+	R_lower = aff_thres[arg_max_Hubert_Coeff]	
+}
+
+#Assigning the values for best value of affinity threshold derived from above algorithm and for best clusters
+aff_thres_b = aff_thres[arg_max_Hubert_Coeff]
+Clus_results_b = CAST_Algo(Unique_UID,Mat_S,aff_thres_b)
+Hubert_Coeff_b = Hubert_T(Unique_UID,Mat_S,aff_thres_b)	
+
+##### -----------------------------------------------END OF Step-2: The CO-Smart-CAST Algorithm------------------------------------------------#####
+#####------------------------------------------------END OF PART-I: USER CLUSTERING------------------------------------------------------------#####
+####################################################################################################################################################
+
+##### -----------------------------------------------PART-II: TIME SEGMENTATION POINTS CALCULATION ALGORITHM-----------------------------------#####
+##### -----------------------------------------------Step-1: GenNTSP Algorithm-----------------------------------------------------------------#####
+
+#Genetic Algorithm based Time Segmentation of Mobile Transactions
+##INPUT:	Mobile transaction database D and its time length
+##OUTPUT:	The number of time segmenting points N_TSP
+
+GetNTSP = function(D)
+{
+	#Calculating Time Length of complete transaction database
+	time_len_total = max(D$Time_App)-min(D$Time_App) + 1
+	
+	#Adding a concatenated column to identify service name and location in the database
+	D$Ser_Loc <-paste(D$Service_Name,D$geo_longitude,D$geo_latitude,sep="|")
+	U_Ser_Loc = unique(D$Ser_Loc)
+	len_U_Ser_Loc = length(U_Ser_Loc)
+	
+	#Defining cumulative time matrix C_T and initializing with 0
+	C_T = matrix(0,time_len_total,4)		
+	
+	# creating a list of accumulative occurrence count of (service and location) in database sequences
+	C_list <- list(C_T)
+	#For each mobile transaction i in the database D
+	for(i in 1:len_U_Ser_Loc)	
+	{
+		for(j in 1:nrow(D))
+		{
+			if(D$Ser_Loc[j]==U_Ser_Loc[i])
+			{
+				for(k in 1:time_len_total)
+				{
+					C_T[k,2] = D$Time_App[j] 
+					C_T[k,3] = D$geo_longitude[j]
+					C_T[k,4] = D$geo_latitude[j]
+				}		
+				for(k in (D$Time_App[i]-min(D$Time_App)+1):time_len_total)
+				{
+					C_T[k,1] = C_T[k,1] + 1 #Calculating accumulative count					
+				}
+			}			
+		}
+		C_list[[i]] <- C_T
+	}
+	
+	#Get the time point with the maximum change rate
+	N_T = vector()
+	for(k in 1:time_len_total)
+	{
+		N_T[k] = 0
+	}	
+	for(i in 1:len_U_Ser_Loc)
+	{
+		C_T_Temp = C_list[[i]]
+		for(k in 1:(time_len_total-1))
+		{
+			Max_Ch_Rate[k] = max((C_T_Temp[k+1,1]-C_T_Temp[k,1])/(1+C_T_Temp[k,1]))
+		}	
+		Arg_Max_Ch_Rate = match(max(Max_Ch_Rate),Max_Ch_Rate)
+		N_T[Arg_Max_Ch_Rate] = N_T[Arg_Max_Ch_Rate] + 1		
+	}
+	
+	#Calculating time point sequence TPS
+	TPS = vector()
+	TPS = 0
+	for(k in 1:time_len_total)
+	{
+		if(N_T[k]>mean(N_T)) {TPS<-append(TPS,k)}
+	}
+	#Calculating the threshold for calculating N_TSP
+	N_TSP = 0
+	len_TPS = length(TPS)
+	alpha_1 = 0
+	for(i in 1:(len_TPS-1))
+	{
+		alpha_1 = alpha_1 + (TPS[i+1] - TPS[i])		
+	}	
+	alpha = (alpha_1)/(length(TPS)-1)
+	
+	#Finally calculating N_TSP
+	for(i in 1:(len_TPS-1))
+	{
+		if((TPS[i+1]-TPS[i])>alpha) {N_TSP = N_TSP+1}		
+	}
+	return (N_TSP)
+}
+
+#Total number of time segmentation points using GetNTSP algorithm Num_TSP
+Num_TSP = GetNTSP(AA)
+
+##### -----------------------------------------------END OF Step-1: GenNTSP Algorithm----------------------------------------------------------#####
+
+##### -----------------------------------------------Step-2: Genetic Algorithm-----------------------------------------------------------------#####
+#To find the best time intervals
+#Unique Services
+U_S = unique(AA$Service_Name)
+n_U_S = length(U_S)
+#Unique Location or Cell
+AA$Location <- paste(AA$geo_longitude,AA$geo_latitude,sep="|")
+U_C = unique(AA$Location)
+n_U_C = length(U_C)
+#Unique time instances
+U_T = unique(AA$Time_App)
+n_U_T = length(U_T)
+	
+#Time chromosome and calculating Fitness Chromosome
+X_t = vector()
+Fitness_X = array(0,n_U_T)
+temp_timeseg = matrix(0,Num_TSP,2)
+T_list <- list(temp_timeseg)
+for(j in 1:n_U_T) #Running these many iterations with initial random time-segments and calculating Fitness value
+{	
+	random_int = sample(1:n_U_T,replace=FALSE,Num_TSP)
+	for(i in 1:Num_TSP)
+	{
+		X_t[i] = U_T[random_int[i]]		
+	}
+	#Storing the time-segments in intermediate matrix
+	X_t = sort(X_t)
+	max_X_t = max(X_t)
+		
+	for(k in 1:Num_TSP)
+	{
+		temp_timeseg[k,1] = j
+		temp_timeseg[k,2] = X_t[k]
+	}
+	T_list[[j]] <- temp_timeseg
+	T_Avg = array(0,Num_TSP+1)
+	T_C_S = array(0,Num_TSP+1)
+	T_combined_term = array(0,Num_TSP+1)
+	for(i in 1:Num_TSP+1)
+	{
+		for(p in 1:n_U_S)
+		{
+			for(k in 1:n_U_C)
+			{
+				for(m in 1:nrow(AA))
+				{
+					if(i==Num_TSP+1)
+					{
+						if((AA$Service_Name[m]==U_S[p]) & (AA$Location[m]==U_C[k]) & (AA$Time_App[m]>=max_X_t))
+						{T_C_S[i] = T_C_S[i] + 1}
+						if((AA$Time_App[m]>=max_X_t)) {T_Avg[i] = T_Avg[i] + 1} #For Average Service count in time interval
+					}
+					else if(i==1)
+					{
+						if((AA$Service_Name[m]==U_S[p]) & (AA$Location[m]==U_C[k]) & (AA$Time_App[m]<X_t[i]))
+						{T_C_S[i] = T_C_S[i] + 1}
+						if((AA$Time_App[m]<X_t[i])) {T_Avg[i] = T_Avg[i] + 1} #For Average Service count in time interval
+					}
+					else
+					{
+						if((AA$Service_Name[m]==U_S[p]) & (AA$Location[m]==U_C[k]) & (AA$Time_App[m]>=X_t[i-1]) & (AA$Time_App[m]<X_t[i]))
+						{T_C_S[i] = T_C_S[i] + 1}
+						if((AA$Time_App[m]>=X_t[i-1]) & (AA$Time_App[m]<X_t[i])) {T_Avg[i] = T_Avg[i] + 1} #For Average Service count in time interval
+					}
+					print(m)
+					print(k)
+					print(p)
+					print(i)
+					print(j)
+				}
+			}			
+		}
+		T_Avg[i] = T_Avg[i]/(n_U_S*n_U_C)
+		T_combined_term[i] = ((T_C_S[i])^2) - (2*T_C_S[i]*T_Avg[i]*(n_U_S*n_U_C)) + ((T_Avg[i]*n_U_S*n_U_C)^2)	
+		Fitness_X[j] = Fitness_X[j] + sqrt(T_combined_term[i]/(n_U_S*n_U_C))
+	}
+}
+
+#Finding the time-segments with maximum Fitness value
+arg_max_Fit = match(max(Fitness_X),Fitness_X)
+Time_Seg = array(0,len_UID)
+Time_Seg_UID = vector()
+Time_Seg = T_list[[arg_max_Fit]]
+for (i in 1:len_UID)
+{
+	for (j in 1:length(Time_Seg))
+	{
+		if(j == 1) {if(AA$Time_App[i]<Time_Seg[j]) {Time_Seg_UID[i] = j}}
+		else if(j == length(Time_Seg)) {if(AA$Time_App[i]>=Time_Seg[j]) {Time_Seg_UID[i] = j+1}}
+		else {if((AA$Time_App[i]>=Time_Seg[j]) & (AA$Time_App[i]<Time_Seg[j+1])) {Time_Seg_UID[i] = j}}
+	}
+}
+
+#####------------------------------------------------END OF PART-II: TIME SEGMENTATION---------------------------------------------------------#####
+####################################################################################################################################################
+
+##### -----------------------------------------------PART-III: DISCOVERING CTMSPs--------------------------------------------------------------#####
+# Both factors of user cluster and time interval are taken into account such that the complete mobile sequential patterns can be discovered
+##This methodology consists of 3 steps:
+##Step-1: Frequent-Transaction Data Mining
+##Step-2: Mobile Transaction Database Transformation
+##Step-3: CTMSP Mining
+
+#Step-1: As a result of PART-I and PART-II of the code we have obtained which userid lies in which cluster and which time-instance lies in which time-interval.
+#Using these results and the original mobile transaction database, we can come up with a transaction frequency table showing the frequency of transactions at
+#Cluster and Time-interval level for different locations.
+#
+#Step-2: Putting a minimum threshold on frequency of transaction in above table, and using combination of Cluster, time-segment, location and frequency of services,
+#we can observe a frequent mobile transaction sequence i.e. how the users in different clusters and time-segment, follow location and service sequences.
+
+#Step-3: Combining the sub-sequences in frequent mobile transaction sequence table to come up with master CTMSPs
+
+##### ---------------------------------------------------PART-IV: Prediction Strategies--------------------------------------------------------#####
+
+##Predicting mobile behaviors of the users by selecting patterns from the corresponding user cluster and time segments.
+##How to find the corresponding user cluster for a new datapoint for a user.
+#Step-1: Select random mobile sequence from each cluster prepared using training sequences (i.e. already existing mobile user database). Select new user mobile sequence. 
+#Step-2: Calculating Similarity Value between these 2 sequences by using PART-I (Step-1) of above code.
+#Step-3: Cluster whose training sequence has highest Similarity value with the new user mobile sequence is selected as the corresponding user cluster.
+#Step-4: Knowing the user cluster and time segment of the new data point, corresponding pattern gives prediction for user's next behavior.
+
